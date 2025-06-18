@@ -157,6 +157,12 @@ def main(args, resume_preempt=False):
         start_time = time.time()
         world_size, rank = init_distributed()
         logger.info(f'Initialized (rank/world-size) {rank}/{world_size} in {time.time() - start_time:.2f}s')
+        
+        # Check if distributed initialization was successful
+        distributed_available = (world_size > 1)
+        if not distributed_available:
+            logger.warning("Distributed training not available. Running in single-GPU or CPU mode.")
+        
         if rank > 0:
             logger.setLevel(logging.ERROR)
 
@@ -243,9 +249,16 @@ def main(args, resume_preempt=False):
             num_epochs=num_epochs,
             ipe_scale=ipe_scale,
             use_bfloat16=use_bfloat16)
-        encoder = DistributedDataParallel(encoder, static_graph=True)
-        predictor = DistributedDataParallel(predictor, static_graph=True)
-        target_encoder = DistributedDataParallel(target_encoder)
+        
+        # Wrap models in DistributedDataParallel only if distributed training is available
+        if distributed_available:
+            logger.info("Wrapping models in DistributedDataParallel")
+            encoder = DistributedDataParallel(encoder, static_graph=True)
+            predictor = DistributedDataParallel(predictor, static_graph=True)
+            target_encoder = DistributedDataParallel(target_encoder)
+        else:
+            logger.info("Skipping DistributedDataParallel as distributed training is not available")
+            
         for p in target_encoder.parameters():
             p.requires_grad = False
 
@@ -338,7 +351,8 @@ def main(args, resume_preempt=False):
 
                     def loss_fn(z, h):
                         loss = F.smooth_l1_loss(z, h)
-                        loss = AllReduce.apply(loss)
+                        if distributed_available:
+                            loss = AllReduce.apply(loss)
                         return loss
 
                     # Step 1. Forward

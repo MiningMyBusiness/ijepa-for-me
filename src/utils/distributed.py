@@ -104,16 +104,19 @@ class AllReduceSum(torch.autograd.Function):
 class AllReduce(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x):
-        if (
-            dist.is_available()
-            and dist.is_initialized()
-            and (dist.get_world_size() > 1)
-        ):
-            x = x.contiguous() / dist.get_world_size()
-            dist.all_reduce(x)
-        return x
+    def forward(ctx, input_):
+        if dist.is_available() and dist.is_initialized():
+            output = input_.clone()
+            dist.all_reduce(output)
+            return output
+        else:
+            return input_  # Just return the input if distributed is not available
 
     @staticmethod
-    def backward(ctx, grads):
-        return grads
+    def backward(ctx, grad_output):
+        if dist.is_available() and dist.is_initialized():
+            output = grad_output.clone()
+            dist.all_reduce(output)
+            return output
+        else:
+            return grad_output  # Just return the gradient if distributed is not available
