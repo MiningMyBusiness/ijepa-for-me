@@ -281,11 +281,10 @@ class VideoFrameDataset(Dataset):
             logger.info(f"Loading images from directory: {directory}")
             
             # Get all files in the directory and its subdirectories
-            for root, _, files in os.walk(directory):
-                for file in files:
-                    # Check if file is an image (common image extensions)
-                    if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')):
-                        self.image_paths.append(os.path.join(root, file))
+            image_dirs = glob.glob(os.path.join(directory, 'pcid_*_ci'))
+            for this_dir in image_dirs:
+                this_image_paths = glob.glob(os.path.join(this_dir, '*.jpg'))
+                self.image_paths.extend(this_image_paths)
         
         # Log the number of images found
         logger.info(f"Found {len(self.image_paths)} images in the dataset")

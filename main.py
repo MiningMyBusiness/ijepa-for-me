@@ -12,6 +12,7 @@ import yaml
 import logging
 import sys
 import os
+import glob
 
 from src.utils.distributed import init_distributed
 
@@ -85,10 +86,9 @@ def main():
             logger.info(f"image_folder path exists: {image_folder}")
             # Count number of image files
             image_count = 0
-            for root, _, files in os.walk(image_folder):
-                for file in files:
-                    if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')):
-                        image_count += 1
+            image_dirs = glob.glob(os.path.join(image_folder, 'pcid_*_ci'))
+            for this_dir in image_dirs:
+                image_count += len(glob.glob(os.path.join(this_dir, '*.jpg')))
             logger.info(f"Found {image_count} image files in image_folder")
         
         # Import train module
