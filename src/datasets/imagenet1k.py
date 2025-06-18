@@ -15,6 +15,10 @@ from logging import getLogger
 
 import torch
 import torchvision
+from torch.utils.data import Dataset
+from PIL import Image
+import glob
+from torchvision import transforms
 
 _GLOBAL_SEED = 0
 logger = getLogger()
@@ -33,18 +37,26 @@ def make_imagenet1k(
     training=True,
     copy_data=False,
     drop_last=True,
-    subset_file=None
+    subset_file=None,
+    use_video_dataset=True,
 ):
-    dataset = ImageNet(
-        root=root_path,
-        image_folder=image_folder,
-        transform=transform,
-        train=training,
-        copy_data=copy_data,
-        index_targets=False)
-    if subset_file is not None:
-        dataset = ImageNetSubset(dataset, subset_file)
-    logger.info('ImageNet dataset created')
+    if not use_video_dataset:
+        dataset = ImageNet(
+            root=root_path,
+            image_folder=image_folder,
+            transform=transform,
+            train=training,
+            copy_data=copy_data,
+            index_targets=False)
+        if subset_file is not None:
+            dataset = ImageNetSubset(dataset, subset_file)
+        logger.info('ImageNet dataset created')
+    else:
+        dataset = VideoFrameDataset(
+            video_dirs=image_folder,
+            transform=transform,
+        )
+        logger.info('Video frame dataset created')
     dist_sampler = torch.utils.data.distributed.DistributedSampler(
         dataset=dataset,
         num_replicas=world_size,
@@ -58,7 +70,7 @@ def make_imagenet1k(
         pin_memory=pin_mem,
         num_workers=num_workers,
         persistent_workers=False)
-    logger.info('ImageNet unsupervised data loader created')
+    logger.info('Unsupervised data loader created')
 
     return dataset, data_loader, dist_sampler
 
@@ -221,3 +233,91 @@ def copy_imgnt_locally(
                 logger.info(f'{local_rank}: Checking {tmp_sgnl_file}')
 
     return data_path
+
+
+class VideoFrameDataset(Dataset):
+    def __init__(self, video_dirs, image_size=(1280, 720), get_path_only=False, transform=None):
+        self.image_paths = []
+        self.image_size = image_size
+        for video_dir in video_dirs:
+            frames = sorted(glob.glob(os.path.join(video_dir, '*.jpg')))
+            self.image_paths.extend(frames)
+
+        if transform is None:
+            self.transform = transforms.Compose([
+                transforms.Resize((image_size[1], image_size[0])),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalize to [-1, 1]
+            ])
+        else:
+            self.transform = transform
+        self._path_only = get_path_only
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        path = self.image_paths[idx]
+        if self._path_only:
+            return path
+        image = self.get_image(path)
+        image = self.check_image(image)
+        return self.transform(image)
+    
+    
+    def get_image(self, path):
+        try:
+            image = Image.open(path).convert('RGB')
+            return image
+        except:
+            image = self.create_black_image(self.image_size[0],
+                                       self.image_size[1])
+            return image
+    
+    
+    def create_black_image(self, width, height):
+        # Create a new RGB image with the specified width and height
+        img = Image.new('RGB', (width, height), (0, 0, 0))
+        return img
+    
+    
+    def check_image(self, image):
+        mode = None
+        if image.size[0] < self.image_size[0]:
+            mode = "pad"
+        if image.size[0] > self.image_size[0]:
+            mode = "crop"
+        if mode is not None:
+            image = self.resize_image(image, self.image_size[0],
+                                 self.image_size[1], mode=mode)
+        return image
+    
+    
+    def resize_image(self, img, target_width, target_height, mode='pad'):
+        if mode not in ['pad', 'crop']:
+            raise ValueError("Mode must be either 'pad' or 'crop'")
+
+        width, height = img.size
+
+        if mode == 'pad':
+            # Calculate the padding needed
+            left = (target_width - width) // 2
+            top = (target_height - height) // 2
+            right = target_width - width - left
+            bottom = target_height - height - top
+
+            # Create a new image with the target size and pad the input image
+            new_img = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+            new_img.paste(img, (left, top))
+
+            return new_img
+
+        elif mode == 'crop':
+            # Calculate the cropping area
+            left = (width - target_width) // 2
+            top = (height - target_height) // 2
+            right = left + target_width
+            bottom = top + target_height
+
+            # Crop the input image
+            return img.crop((left, top, right, bottom))
