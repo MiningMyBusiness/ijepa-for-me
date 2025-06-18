@@ -15,7 +15,8 @@ from logging import getLogger
 
 import torch
 import torchvision
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from PIL import Image
 import glob
 from torchvision import transforms
@@ -76,12 +77,12 @@ def make_imagenet1k(
         dataset = TensorDataset(dummy_img.unsqueeze(0), torch.tensor([0]))
         logger.warning("Created dummy dataset with one black image to prevent crashes")
     
-    dist_sampler = torch.utils.data.distributed.DistributedSampler(
+    dist_sampler = DistributedSampler(
         dataset=dataset,
         num_replicas=world_size,
         rank=rank)
     
-    data_loader = torch.utils.data.DataLoader(
+    data_loader = DataLoader(
         dataset,
         collate_fn=collator,
         sampler=dist_sampler,
