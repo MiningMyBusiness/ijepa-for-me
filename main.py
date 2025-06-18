@@ -75,6 +75,22 @@ def main():
         logger.info(f"Batch size: {config['data']['batch_size']}")
         logger.info(f"Number of epochs: {config['optimization']['epochs']}")
         
+        # Validate image folder path
+        image_folder = config['data']['image_folder']
+        if image_folder is None:
+            logger.error("image_folder is not specified in the config!")
+        elif not os.path.exists(image_folder):
+            logger.error(f"image_folder path does not exist: {image_folder}")
+        else:
+            logger.info(f"image_folder path exists: {image_folder}")
+            # Count number of image files
+            image_count = 0
+            for root, _, files in os.walk(image_folder):
+                for file in files:
+                    if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')):
+                        image_count += 1
+            logger.info(f"Found {image_count} image files in image_folder")
+        
         # Import train module
         logger.info("Importing training module")
         from src.train import main as train_main

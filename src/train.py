@@ -234,6 +234,7 @@ def main(args, resume_preempt=False):
                 drop_last=True)
         ipe = len(unsupervised_loader)
         logger.info(f"Data loaders initialized in {time.time() - start_time:.2f}s")
+        logger.info(f"Data loader initialized with {len(unsupervised_loader)} batches")
 
         # -- init optimizer and scheduler
         optimizer, scaler, scheduler, wd_scheduler = init_opt(
@@ -316,8 +317,15 @@ def main(args, resume_preempt=False):
             maskA_meter = AverageMeter()
             maskB_meter = AverageMeter()
             time_meter = AverageMeter()
-
+            
+            # Add this debug line
+            logger.info(f"Starting epoch with {len(unsupervised_loader)} batches")
+            
+            batch_count = 0
             for itr, (udata, masks_enc, masks_pred) in enumerate(unsupervised_loader):
+                batch_count += 1
+                if itr == 0:
+                    logger.info(f"First batch loaded successfully with {len(udata[0])} images")
 
                 def load_imgs():
                     # -- unsupervised imgs

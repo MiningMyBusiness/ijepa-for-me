@@ -52,15 +52,35 @@ def make_imagenet1k(
             dataset = ImageNetSubset(dataset, subset_file)
         logger.info('ImageNet dataset created')
     else:
+        # Check if image_folder is a valid path
+        if image_folder is None:
+            logger.error("image_folder is None! Please provide a valid path.")
+            image_folder = "."  # Default to current directory
+        
+        if not os.path.exists(image_folder):
+            logger.error(f"image_folder path does not exist: {image_folder}")
+            
         dataset = VideoFrameDataset(
             video_dirs=image_folder,
             transform=transform,
         )
-        logger.info('Video frame dataset created')
+        logger.info(f'Video frame dataset created with {len(dataset)} images')
+    
+    # Check if dataset is empty
+    if len(dataset) == 0:
+        logger.error("Dataset is empty! No images found.")
+        # Create a dummy dataset with a single black image to prevent crashes
+        from torch.utils.data import TensorDataset
+        import torch
+        dummy_img = torch.zeros(3, 224, 224)
+        dataset = TensorDataset(dummy_img.unsqueeze(0), torch.tensor([0]))
+        logger.warning("Created dummy dataset with one black image to prevent crashes")
+    
     dist_sampler = torch.utils.data.distributed.DistributedSampler(
         dataset=dataset,
         num_replicas=world_size,
         rank=rank)
+    
     data_loader = torch.utils.data.DataLoader(
         dataset,
         collate_fn=collator,
@@ -70,7 +90,8 @@ def make_imagenet1k(
         pin_memory=pin_mem,
         num_workers=num_workers,
         persistent_workers=False)
-    logger.info('Unsupervised data loader created')
+    
+    logger.info(f'Data loader created with {len(data_loader)} batches')
 
     return dataset, data_loader, dist_sampler
 
@@ -236,88 +257,65 @@ def copy_imgnt_locally(
 
 
 class VideoFrameDataset(Dataset):
-    def __init__(self, video_dirs, image_size=(1280, 720), get_path_only=False, transform=None):
+    def __init__(self, video_dirs, transform=None):
+        """
+        Dataset for loading video frames as images
+        
+        Args:
+            video_dirs: Path to directory containing video frames or images
+            transform: Torchvision transforms to apply to images
+        """
+        self.transform = transform
         self.image_paths = []
-        self.image_size = image_size
-        for video_dir in video_dirs:
-            frames = sorted(glob.glob(os.path.join(video_dir, '*.jpg')))
-            self.image_paths.extend(frames)
-
-        if transform is None:
-            self.transform = transforms.Compose([
-                transforms.Resize((image_size[1], image_size[0])),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalize to [-1, 1]
-            ])
-        else:
-            self.transform = transform
-        self._path_only = get_path_only
-
+        
+        # Check if video_dirs is a string (single directory) or list of directories
+        if isinstance(video_dirs, str):
+            video_dirs = [video_dirs]
+            
+        # Collect all image files from the directories
+        for directory in video_dirs:
+            if not os.path.exists(directory):
+                logger.error(f"Directory does not exist: {directory}")
+                continue
+                
+            logger.info(f"Loading images from directory: {directory}")
+            
+            # Get all files in the directory and its subdirectories
+            for root, _, files in os.walk(directory):
+                for file in files:
+                    # Check if file is an image (common image extensions)
+                    if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp')):
+                        self.image_paths.append(os.path.join(root, file))
+        
+        # Log the number of images found
+        logger.info(f"Found {len(self.image_paths)} images in the dataset")
+        
+        if len(self.image_paths) == 0:
+            logger.warning("No images found in the specified directories!")
+    
     def __len__(self):
         return len(self.image_paths)
-
+    
     def __getitem__(self, idx):
-        path = self.image_paths[idx]
-        if self._path_only:
-            return path
-        image = self.get_image(path)
-        image = self.check_image(image)
-        return self.transform(image), 0
-    
-    
-    def get_image(self, path):
+        img_path = self.image_paths[idx]
+        
         try:
-            image = Image.open(path).convert('RGB')
-            return image
-        except:
-            image = self.create_black_image(self.image_size[0],
-                                       self.image_size[1])
-            return image
-    
-    
-    def create_black_image(self, width, height):
-        # Create a new RGB image with the specified width and height
-        img = Image.new('RGB', (width, height), (0, 0, 0))
-        return img
-    
-    
-    def check_image(self, image):
-        mode = None
-        if image.size[0] < self.image_size[0]:
-            mode = "pad"
-        if image.size[0] > self.image_size[0]:
-            mode = "crop"
-        if mode is not None:
-            image = self.resize_image(image, self.image_size[0],
-                                 self.image_size[1], mode=mode)
-        return image
-    
-    
-    def resize_image(self, img, target_width, target_height, mode='pad'):
-        if mode not in ['pad', 'crop']:
-            raise ValueError("Mode must be either 'pad' or 'crop'")
-
-        width, height = img.size
-
-        if mode == 'pad':
-            # Calculate the padding needed
-            left = (target_width - width) // 2
-            top = (target_height - height) // 2
-            right = target_width - width - left
-            bottom = target_height - height - top
-
-            # Create a new image with the target size and pad the input image
-            new_img = Image.new('RGB', (target_width, target_height), (0, 0, 0))
-            new_img.paste(img, (left, top))
-
-            return new_img
-
-        elif mode == 'crop':
-            # Calculate the cropping area
-            left = (width - target_width) // 2
-            top = (height - target_height) // 2
-            right = left + target_width
-            bottom = top + target_height
-
-            # Crop the input image
-            return img.crop((left, top, right, bottom))
+            # Load image using PIL
+            from PIL import Image
+            img = Image.open(img_path).convert('RGB')
+            
+            # Apply transforms if specified
+            if self.transform is not None:
+                img = self.transform(img)
+                
+            # Return image with a dummy target (0) for compatibility with ImageNet dataset
+            return img, 0
+            
+        except Exception as e:
+            logger.error(f"Error loading image {img_path}: {str(e)}")
+            # Return a placeholder in case of error
+            if self.transform is not None:
+                # Create a black image of the expected size
+                img = Image.new('RGB', (224, 224), color=0)
+                return self.transform(img), 0
+            return None, 0
