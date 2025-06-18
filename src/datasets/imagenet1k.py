@@ -262,7 +262,7 @@ class VideoFrameDataset(Dataset):
             return path
         image = self.get_image(path)
         image = self.check_image(image)
-        return self.transform(image)
+        return self.transform(image), 0
     
     
     def get_image(self, path):
