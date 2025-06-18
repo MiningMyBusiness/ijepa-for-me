@@ -6,18 +6,20 @@
 #
 
 import os
+import logging
+import traceback
 
 import torch
 import torch.distributed as dist
 
-from logging import getLogger
-
-logger = getLogger()
+logger = logging.getLogger(__name__)
 
 
 def init_distributed(port=40112, rank_and_world_size=(None, None)):
-
+    logger.info("Initializing distributed process group")
+    
     if dist.is_available() and dist.is_initialized():
+        logger.info("Distributed already initialized")
         return dist.get_world_size(), dist.get_rank()
 
     rank, world_size = rank_and_world_size
@@ -25,23 +27,28 @@ def init_distributed(port=40112, rank_and_world_size=(None, None)):
 
     if (rank is None) or (world_size is None):
         try:
+            logger.info("Trying to get SLURM environment variables")
             world_size = int(os.environ['SLURM_NTASKS'])
             rank = int(os.environ['SLURM_PROCID'])
             os.environ['MASTER_ADDR'] = os.environ['HOSTNAME']
-        except Exception:
-            logger.info('SLURM vars not set (distributed training not available)')
+            logger.info(f"SLURM vars set: world_size={world_size}, rank={rank}, master_addr={os.environ['MASTER_ADDR']}")
+        except Exception as e:
+            logger.info(f'SLURM vars not set (distributed training not available): {str(e)}')
             world_size, rank = 1, 0
             return world_size, rank
 
     try:
         os.environ['MASTER_PORT'] = str(port)
+        logger.info(f"Initializing process group with backend=nccl, world_size={world_size}, rank={rank}, port={port}")
         torch.distributed.init_process_group(
             backend='nccl',
             world_size=world_size,
             rank=rank)
+        logger.info("Process group initialized successfully")
     except Exception as e:
         world_size, rank = 1, 0
-        logger.info(f'distributed training not available {e}')
+        logger.error(f'Distributed training not available: {str(e)}')
+        logger.error(traceback.format_exc())
 
     return world_size, rank
 

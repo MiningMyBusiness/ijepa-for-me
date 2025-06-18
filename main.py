@@ -6,14 +6,24 @@
 #
 
 import argparse
-
 import multiprocessing as mp
-
 import pprint
 import yaml
+import logging
+import sys
+import os
 
 from src.utils.distributed import init_distributed
-from src.train import main as app_main
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -24,18 +34,8 @@ parser.add_argument(
     '--devices', type=str, nargs='+', default=['cuda:0'],
     help='which devices to use on local machine')
 
-
 def process_main(rank, fname, world_size, devices):
-    import os
     os.environ['CUDA_VISIBLE_DEVICES'] = str(devices[rank].split(':')[-1])
-
-    import logging
-    logging.basicConfig()
-    logger = logging.getLogger()
-    if rank == 0:
-        logger.setLevel(logging.INFO)
-    else:
-        logger.setLevel(logging.ERROR)
 
     logger.info(f'called-params {fname}')
 
@@ -49,17 +49,42 @@ def process_main(rank, fname, world_size, devices):
 
     world_size, rank = init_distributed(rank_and_world_size=(rank, world_size))
     logger.info(f'Running... (rank: {rank}/{world_size})')
+    from src.train import main as app_main
     app_main(args=params)
 
-
-if __name__ == '__main__':
+def main():
     args = parser.parse_args()
+    
+    logger.info(f"Starting training with config file: {args.fname}")
+    logger.info(f"Using devices: {args.devices}")
+    
+    # Check if config file exists
+    if not os.path.exists(args.fname):
+        logger.error(f"Config file not found: {args.fname}")
+        return
+    
+    try:
+        # Load config file
+        logger.info(f"Loading configuration from {args.fname}")
+        with open(args.fname, 'r') as f:
+            config = yaml.safe_load(f)
+        logger.info("Configuration loaded successfully")
+        
+        # Log some key configuration parameters
+        logger.info(f"Model: {config['meta']['model_name']}")
+        logger.info(f"Batch size: {config['data']['batch_size']}")
+        logger.info(f"Number of epochs: {config['optimization']['epochs']}")
+        
+        # Import train module
+        logger.info("Importing training module")
+        from src.train import main as train_main
+        
+        # Call the training function
+        logger.info("Starting training process")
+        train_main(config)
+        
+    except Exception as e:
+        logger.error(f"Error during execution: {str(e)}", exc_info=True)
 
-    num_gpus = len(args.devices)
-    mp.set_start_method('spawn')
-
-    for rank in range(num_gpus):
-        mp.Process(
-            target=process_main,
-            args=(rank, args.fname, num_gpus, args.devices)
-        ).start()
+if __name__ == "__main__":
+    main()
